@@ -10,24 +10,33 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import jakarta.annotation.PostConstruct;
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 /**
  * Firebase Cloud Messaging (FCM) V1 API — Firebase Admin SDK orqali.
  *
- * application.yml da quyidagini qo'shing:
- *   fcm:
- *     service-account-path: /path/to/ecoulash-6862d356bdff.json
- *     project-id: ecoulash
+ * Railway environment variables:
+ *   FCM_SERVICE_ACCOUNT_JSON  → Firebase service account JSON ning to'liq matni
+ *   FCM_PROJECT_ID            → ecoulash
+ *
+ * YOKI fayl orqali:
+ *   FCM_SERVICE_ACCOUNT_PATH  → classpath:ecoulash-service-account.json
  */
 @Service
 public class FcmService {
 
     private static final Logger log = LoggerFactory.getLogger(FcmService.class);
 
+    // ✅ Variant 1: JSON matnini to'g'ridan Railway env var ga qo'yish
+    @Value("${FCM_SERVICE_ACCOUNT_JSON:}")
+    private String serviceAccountJson;
+
+    // Variant 2: Fayl yo'li orqali (classpath yoki absolute path)
     @Value("${fcm.service-account-path:}")
     private String serviceAccountPath;
 
@@ -38,30 +47,40 @@ public class FcmService {
 
     @PostConstruct
     public void init() {
-        if (serviceAccountPath == null || serviceAccountPath.isBlank()) {
-            log.warn("FCM: fcm.service-account-path yo'q! Notification ishlamaydi.");
-            return;
-        }
-
         // Agar allaqachon init bo'lgan bo'lsa qayta qilmaymiz
         if (!FirebaseApp.getApps().isEmpty()) {
             initialized = true;
-            log.info("FCM: Firebase allaqachon initialized");
+            log.info("FCM: Firebase allaqachon initialized ✅");
             return;
         }
 
         try {
-            InputStream serviceAccount;
-            // Classpath dan yoki fayl tizimidan o'qish
-            if (serviceAccountPath.startsWith("classpath:")) {
-                String path = serviceAccountPath.replace("classpath:", "");
-                serviceAccount = getClass().getClassLoader().getResourceAsStream(path);
-                if (serviceAccount == null) {
-                    log.error("FCM: classpath resource topilmadi: {}", path);
-                    return;
+            InputStream serviceAccount = null;
+
+            // ✅ Birinchi: JSON matnini env var dan o'qish (Railway uchun eng qulay)
+            if (serviceAccountJson != null && !serviceAccountJson.isBlank()) {
+                serviceAccount = new ByteArrayInputStream(
+                        serviceAccountJson.getBytes(StandardCharsets.UTF_8));
+                log.info("FCM: Service account JSON env var dan o'qildi");
+
+                // Ikkinchi: fayl yo'li orqali
+            } else if (serviceAccountPath != null && !serviceAccountPath.isBlank()) {
+                if (serviceAccountPath.startsWith("classpath:")) {
+                    String path = serviceAccountPath.replace("classpath:", "");
+                    serviceAccount = getClass().getClassLoader().getResourceAsStream(path);
+                    if (serviceAccount == null) {
+                        log.error("FCM: classpath resource topilmadi: {}", path);
+                        return;
+                    }
+                } else {
+                    serviceAccount = new FileInputStream(serviceAccountPath);
                 }
+                log.info("FCM: Service account fayl dan o'qildi: {}", serviceAccountPath);
+
             } else {
-                serviceAccount = new FileInputStream(serviceAccountPath);
+                log.warn("FCM: Service account topilmadi! " +
+                        "FCM_SERVICE_ACCOUNT_JSON yoki fcm.service-account-path kerak.");
+                return;
             }
 
             FirebaseOptions options = FirebaseOptions.builder()
@@ -79,11 +98,6 @@ public class FcmService {
 
     /**
      * Bitta qurilmaga notification yuborish.
-     *
-     * @param fcmToken  Qabul qiluvchi qurilma FCM token
-     * @param title     Notification sarlavhasi
-     * @param body      Notification matni
-     * @param data      Qo'shimcha ma'lumotlar (ekranni ochish uchun)
      */
     public void sendNotification(String fcmToken, String title, String body,
                                  Map<String, String> data) {
@@ -97,7 +111,6 @@ public class FcmService {
         }
 
         try {
-            // Android uchun sozlamalar
             AndroidConfig androidConfig = AndroidConfig.builder()
                     .setPriority(AndroidConfig.Priority.HIGH)
                     .setNotification(AndroidNotification.builder()
@@ -106,7 +119,6 @@ public class FcmService {
                             .build())
                     .build();
 
-            // iOS uchun sozlamalar
             ApnsConfig apnsConfig = ApnsConfig.builder()
                     .setAps(Aps.builder()
                             .setSound("default")
@@ -114,7 +126,6 @@ public class FcmService {
                             .build())
                     .build();
 
-            // Xabar yasash
             Message.Builder messageBuilder = Message.builder()
                     .setToken(fcmToken)
                     .setNotification(Notification.builder()
@@ -124,7 +135,6 @@ public class FcmService {
                     .setAndroidConfig(androidConfig)
                     .setApnsConfig(apnsConfig);
 
-            // Qo'shimcha data qo'shamiz
             if (data != null && !data.isEmpty()) {
                 messageBuilder.putAllData(data);
             }
@@ -134,10 +144,9 @@ public class FcmService {
                     fcmToken.substring(0, Math.min(10, fcmToken.length())));
 
         } catch (FirebaseMessagingException e) {
-            // Token eskirgan yoki noto'g'ri bo'lsa
             if (e.getMessagingErrorCode() == MessagingErrorCode.UNREGISTERED
                     || e.getMessagingErrorCode() == MessagingErrorCode.INVALID_ARGUMENT) {
-                log.warn("FCM token yaroqsiz, tozalash kerak: {}", fcmToken.substring(0, 10) + "...");
+                log.warn("FCM token yaroqsiz: {}...", fcmToken.substring(0, 10));
             } else {
                 log.error("FCM yuborishda xato [{}]: {}", e.getMessagingErrorCode(), e.getMessage());
             }
@@ -148,31 +157,20 @@ public class FcmService {
 
     /**
      * Chat notification — yangi xabar keldi.
-     *
-     * @param recipientToken  Qabul qiluvchi FCM token
-     * @param senderName      Kim yubordi
-     * @param messageText     Xabar matni
-     * @param productId       Mahsulot ID (ekranni ochish uchun)
-     * @param buyerId         Xaridor ID (chat aniqlashtirish uchun)
      */
     public void sendChatNotification(String recipientToken, String senderName,
                                      String messageText, Long productId, Long buyerId) {
         Map<String, String> data = Map.of(
-                "type",          "chat",
-                "productId",     String.valueOf(productId),
-                "buyerId",       String.valueOf(buyerId),
-                "click_action",  "FLUTTER_NOTIFICATION_CLICK"
+                "type",         "chat",
+                "productId",    String.valueOf(productId),
+                "buyerId",      String.valueOf(buyerId),
+                "click_action", "FLUTTER_NOTIFICATION_CLICK"
         );
 
         String preview = messageText != null && messageText.length() > 60
                 ? messageText.substring(0, 60) + "..."
                 : (messageText != null ? messageText : "");
 
-        sendNotification(
-                recipientToken,
-                "💬 " + senderName,
-                preview,
-                data
-        );
+        sendNotification(recipientToken, "💬 " + senderName, preview, data);
     }
 }

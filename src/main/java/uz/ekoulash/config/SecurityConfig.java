@@ -40,6 +40,8 @@ public class SecurityConfig {
                         // Chat va mark-sold — authenticated (avval)
                         .requestMatchers(HttpMethod.GET,  "/api/products/*/messages").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/products/*/messages").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/products/*/messages/read").authenticated()
+                        .requestMatchers(HttpMethod.GET,  "/api/products/*/chat-threads").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/products/*/mark-sold").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/products/*/like").authenticated()
 
