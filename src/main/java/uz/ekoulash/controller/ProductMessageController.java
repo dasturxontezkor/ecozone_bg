@@ -228,6 +228,58 @@ public class ProductMessageController {
         return ResponseEntity.ok(Map.of("threads", threads));
     }
 
+    // ── POST /api/products/{id}/messages/read ────────────────────────────
+    /**
+     * Xabarlarni o'qildi deb belgilash.
+     * Flutter har yangi xabar olganda shu endpointni chaqiradi.
+     *
+     * Body: { "buyerId": 123 }
+     * Qaytaradi: { "updated": 3 }
+     */
+    @PostMapping("/{id}/messages/read")
+    public ResponseEntity<?> markMessagesRead(
+            @PathVariable Long id,
+            @AuthenticationPrincipal User currentUser,
+            @RequestBody Map<String, Object> body) {
+
+        Object buyerIdRaw = body.get("buyerId");
+        if (buyerIdRaw == null) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "buyerId yuborilishi shart"));
+        }
+        Long buyerId;
+        try {
+            buyerId = Long.parseLong(buyerIdRaw.toString());
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("error", "buyerId noto'g'ri format"));
+        }
+
+        Product product = productRepo.findById(id).orElse(null);
+        if (product == null) return ResponseEntity.notFound().build();
+
+        // Faqat mahsulot egasi yoki xaridor o'zi ko'ra oladi
+        boolean isOwner = product.getUser().getId().equals(currentUser.getId());
+        boolean isBuyer = currentUser.getId().equals(buyerId);
+        if (!isOwner && !isBuyer) {
+            return ResponseEntity.status(403).body(Map.of("error", "Ruxsat yo'q"));
+        }
+
+        // Joriy userga KELGAN (boshqa tomondan yuborilgan) o'qilmagan xabarlarni belgilaymiz
+        List<ProductMessage> msgs = messageRepo.findByProductAndBuyer(product, buyerId);
+        List<ProductMessage> toMark = msgs.stream()
+                .filter(m -> !m.getSender().getId().equals(currentUser.getId())
+                        && !Boolean.TRUE.equals(m.getIsRead()))
+                .collect(Collectors.toList());
+
+        if (!toMark.isEmpty()) {
+            toMark.forEach(m -> m.setIsRead(true));
+            messageRepo.saveAll(toMark);
+        }
+
+        return ResponseEntity.ok(Map.of("updated", toMark.size()));
+    }
+
     // ── POST /api/products/{id}/mark-sold ─────────────────────────────────
 
     @PostMapping("/{id}/mark-sold")
