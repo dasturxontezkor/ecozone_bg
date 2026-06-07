@@ -1,8 +1,8 @@
 server:
   port: 8080
 fcm:
-  project-id=your-firebase-project-id: YOUR_FCM_SERVER_KEY_HERE
-  server-key=YOUR_FCM_SERVER_KEY_HERE: your-firebase-project-id
+  service-account-path: classpath:ecoulash-6862d356bdff.json
+  project-id: ecoulash
 spring:
   datasource:
     url: jdbc:postgresql://acela.proxy.rlwy.net:39352/railway
